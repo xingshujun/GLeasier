@@ -64,13 +64,8 @@ int
 context::init(void)
 {
 	for (unsigned int i = 0; i < drawobjs.size(); i++) {
-		
 		glUseProgram(drawobjs[i]->program());
 		drawobjs[i]->init_setup();
-//		GLuint prog = std::get<0>(_init_cbs[i]);
-
-//		cb_t callback = std::get<1>(_init_cbs[i]);
-//		callback(prog, std::get<2>(_init_cbs[i]));
 	}
 	return 0;
 }
@@ -80,15 +75,17 @@ int
 context::run()
 {
 	do {
-		glfwPollEvents();
 		//here comes the problem, should I finish all the setup before drawing or not?
 		for (unsigned int i = 0; i < drawobjs.size(); i++) {
+			glUseProgram(drawobjs[i]->program());
 			drawobjs[i]->itr_setup();
 		}
 		for (unsigned int i = 0; i < drawobjs.size(); i++) {
+			//weird enough, glUseProgram caused problme for not drawing anything.
 			glUseProgram(drawobjs[i]->program());
 			drawobjs[i]->itr_draw();
 		}
+		glfwPollEvents();		
 		glfwSwapBuffers(_win);
 	} while (glfwGetKey(_win, GLFW_KEY_ESCAPE) != GLFW_PRESS &&
 		 !glfwWindowShouldClose(_win));

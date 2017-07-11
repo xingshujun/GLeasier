@@ -31,6 +31,7 @@ public:
 	virtual int itr_setup(void) = 0;
 	//then this get called
 	virtual int itr_draw(void) = 0;
+	//write your own function for loading data
 };
 
 
