@@ -2,6 +2,8 @@
 #include <vector>
 #include <iostream>
 #include <stdexcept>
+#include <algorithm>
+#include <random>
 
 #include <GL/glew.h>
 #ifdef __linux__
@@ -9,6 +11,13 @@
 #elif __WIN32
 #include <GL/glfw3.h>
 #endif
+
+#include <glm/glm.hpp>
+#include <glm/ext.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
+
 
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
@@ -19,6 +28,7 @@
 #include <assimp/postprocess.h>
 
 #include <model.hpp>
+#include <data.hpp>
 
 sprt_tex2d_t texture_types_supported[TEX_NTexType] = {
 	{aiTextureType_AMBIENT, TEX_Ambient},
@@ -50,19 +60,26 @@ loadTexture2GPU(const std::string fname)
 
 Mesh::Mesh(const aiScene *scene, aiMesh *mesh)
 {
-	this->vertices.resize(mesh->mNumVertices);
+	//rebind for easier name
+	std::vector<glm::vec3> &poses = this->vertices.Positions;
+	std::vector<glm::vec3> &norms = this->vertices.Normals;
+	std::vector<glm::vec2> &texuvs= this->vertices.TexCoords;
+
+	poses.resize(mesh->mNumVertices);
+	norms.resize(mesh->mNumVertices);
+	if (mesh->mTextureCoords[0])
+		texuvs.resize(mesh->mNumVertices);
+	
 	for (GLuint i = 0; i < mesh->mNumVertices; i++) {
-		this->vertices[i].Position = glm::vec3(mesh->mVertices[i].x,
-						       mesh->mVertices[i].y,
-						       mesh->mVertices[i].z);
-		this->vertices[i].Normal = glm::vec3(mesh->mNormals[i].x,
-						     mesh->mNormals[i].y,
-						     mesh->mNormals[i].z);
-		if (mesh->mTextureCoords[0])//if you have different texture coordinates...
-			this->vertices[i].TexCoords = glm::vec2(mesh->mTextureCoords[0][i].x,
-								mesh->mTextureCoords[0][i].y);
-		else
-			this->vertices[i].TexCoords = glm::vec2(0.0f, 0.0f);
+		poses[i] = glm::vec3(mesh->mVertices[i].x,
+				     mesh->mVertices[i].y,
+				     mesh->mVertices[i].z);
+		norms[i] = glm::vec3(mesh->mNormals[i].x,
+				     mesh->mNormals[i].y,
+				     mesh->mNormals[i].z);
+		if (mesh->mTextureCoords[0])
+			texuvs[i] = glm::vec2(mesh->mTextureCoords[0][i].x,
+					      mesh->mTextureCoords[0][i].y);
 	}
 	this->indices.resize(mesh->mNumFaces * 3);
 	for (GLuint i = 0; i < mesh->mNumFaces; i++) {
@@ -79,24 +96,56 @@ Mesh::Mesh(const aiScene *scene, aiMesh *mesh)
 Mesh::Mesh(const std::vector<glm::vec3>& vertxs,
 	       const std::vector<glm::vec3>& norms,
 	       const std::vector<float>& indices,
-	       const std::vector<glm::vec2> *uvs,
+	       const std::vector<glm::vec2>& uvs,
 	       const unsigned int material_id)
 {
 	assert(vertxs.size() == norms.size());
 	assert(indices.size() % 3 == 0);
-	this->vertices.resize(vertices.size());
-	for (GLuint i = 0; i < this->vertices.size(); i++) {
-		this->vertices[i].Position  = vertxs[i];
-		this->vertices[i].Normal    = norms[i];
-		if (!uvs)
-			this->vertices[i].TexCoords = glm::vec2(0.0f, 0.0f);
-		else
-			this->vertices[i].TexCoords = (*uvs)[i];
-	}
+	assert(uvs.size() == vertxs.size() || uvs.size() == 0);
+	std::vector<glm::vec3> &poses   = this->vertices.Positions;
+	std::vector<glm::vec3> &normals = this->vertices.Normals;
+	std::vector<glm::vec2> &texuvs  = this->vertices.TexCoords;
+
+	std::copy(vertxs.begin(), vertxs.end(), poses.begin());
+	std::copy(norms.begin(), norms.end(), normals.begin());
+	if (uvs.size() > 0)
+		std::copy(uvs.begin(), uvs.end(), texuvs.begin());
+
 	std::copy(indices.begin(), indices.end(), this->indices.begin());
 	this->materialIndx = material_id; //the model should take care of this
 }
 
+
+Mesh::Mesh(const float *vertx, const float *norms, const float *uvs, const int nnodes,
+	     const float *indices, const int nfaces)
+{
+	const int size_vn = 3;
+	const int size_uv = 2;
+
+	std::vector<glm::vec3> &poses   = this->vertices.Positions;
+	std::vector<glm::vec3> &normals = this->vertices.Normals;
+	std::vector<glm::vec2> &texuvs  = this->vertices.TexCoords;
+	poses.resize(nnodes);
+	normals.resize(nnodes);
+	if (uvs)
+		texuvs.resize(nnodes);
+	for (int i = 0; i < nnodes; i++) {
+		poses[i]   = glm::make_vec3(i*size_vn + vertx);
+		normals[i] = glm::make_vec3(i*size_vn + norms);
+		texuvs[i]  = glm::make_vec2(i*size_uv + uvs);
+	}
+	if (indices) {
+		this->indices.resize(nfaces*3);
+		std::copy(indices, indices + nfaces*3, this->indices.begin());
+	} else {
+		//otherwise we make a indices as well. so no draw triangles.
+		this->indices.resize(nnodes);
+		int n = {0};
+		std::generate(this->indices.begin(), this->indices.end(), [&] {return n++;});
+	}
+}
+
+//a mesh uses draw_triangles instead of
 Mesh::~Mesh(void)
 {
 	if (this->VAO) {
@@ -114,40 +163,51 @@ Mesh::~Mesh(void)
 }
 
 void
-Mesh::pushMesh2GPU(void)
+Mesh::pushMesh2GPU(int param)
 {
 	glGenVertexArrays(1, &this->VAO);
 	glGenBuffers(1, &this->VBO);
 	glGenBuffers(1, &this->EBO);
-	
-	glBindVertexArray(VAO);
-	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 
-	glBufferData(GL_ARRAY_BUFFER, this->vertices.size() * sizeof(Vertex), //size
-		     &this->vertices[0], //starting address
-		     GL_STATIC_DRAW);
+	glBindVertexArray(this->VAO);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, this->EBO);
 
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, this->indices.size() * sizeof(GLuint), //size
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, this->indices.size() * sizeof(GLuint),
 		     &this->indices[0],
 		     GL_STATIC_DRAW);
-
-	//Vertex positons for layouts
+	
+	glBindBuffer(GL_ARRAY_BUFFER, this->VBO);
+	glBufferData(GL_ARRAY_BUFFER, this->vertices.Positions.size() * (2 * sizeof(glm::vec3) + sizeof(glm::vec2)),
+		     NULL, GL_STATIC_DRAW);
+	size_t offset = 0;
+	glBufferSubData(GL_ARRAY_BUFFER, offset, this->vertices.Positions.size() * sizeof(glm::vec3),
+			&this->vertices.Positions[0]);
+	//Enable Attributes
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-			      (GLvoid *)0);
-	//Vertex Normals
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-			      (GLvoid *)offsetof(Vertex, Normal));
-	//Vertex Texture Coords, if they dont have texture coordinates, we need
-	//to define texture for it.
-	glEnableVertexAttribArray(2);
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-			      (GLvoid *)offsetof(Vertex, TexCoords));
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3),
+			      (GLvoid *)offset);
+	offset += this->vertices.Positions.size() * sizeof(glm::vec3);
+	
+	if (param & LOAD_NORMAL) {
+		glBufferSubData(GL_ARRAY_BUFFER, offset,
+				this->vertices.Normals.size() * sizeof(glm::vec3),
+				&this->vertices.Normals[0]);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3),
+				      (GLvoid *)offset);
+		offset += this->vertices.Normals.size() * sizeof(glm::vec3);
+	}
+	if (param & LOAD_TEX) {
+		glBufferSubData(GL_ARRAY_BUFFER,
+				offset, this->vertices.TexCoords.size() * sizeof(glm::vec2),
+				&this->vertices.TexCoords[0]);
+		glEnableVertexAttribArray(2);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2),
+				      (GLvoid *)offset);
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
-//	std::cout << "VAO: " << VAO << " VBO: " << this->VBO << " EBO: " << EBO << std::endl;
-//	std::cout << "indices size" << this->indices.size() << std::endl;
 }
 
 void
@@ -168,33 +228,21 @@ Mesh::draw(const ShaderMan *sm, const Model& model)
 			}
 		}
 	}
-	/*
-	for (GLuint i = 0; i < mat.size(); i++) {
-		std::string uniform;
-		GLuint uniform_loc;
-		glActiveTexture(GL_TEXTURE0 + i);
-		glBindTexture(GL_TEXTURE_2D, mat[i].id);
-		//here is the major problem: you think you know the uniform name
-		//for every mesh, you can't obviously, and this is obviously
-		//bad. you can't control the order of the uniform in this way
-		if (mat[i].type == TEX_Diffuse)
-			uniform = std::string("diffuse");
-		else if (mat[i].type == TEX_Specular)
-			uniform = std::string("specular");
-		//we should assume here is done, what we need to do is 
-		uniform_loc = glGetUniformLocation(prog, uniform.c_str());
-		glUniform1i(uniform_loc, i);
-//		std::cout << "material localtion " << uniform_loc << std::endl;
-		glBindTexture(GL_TEXTURE_2D, mat[i].id);
-	}
-	*/
 	glBindVertexArray(this->VAO);
 	glBindBuffer(GL_ARRAY_BUFFER, this->VBO);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, this->EBO);
-	glDrawElements(GL_TRIANGLES, this->indices.size(), GL_UNSIGNED_INT, 0);
+	if (model.instanceVBO == 0) {
+		glDrawElements(GL_TRIANGLES, this->indices.size(), GL_UNSIGNED_INT, 0);
+	}
+	else {
+//		std::cerr << model.get_ninstances() << std::endl;
+		glDrawElementsInstanced(GL_TRIANGLES, this->indices.size(), GL_UNSIGNED_INT, 0, model.get_ninstances());
+	}
+
 	glBindVertexArray(0);
 	glBindTexture(GL_TEXTURE_2D, 0);
 }
+
 
 int
 Model::processNode(const aiScene *scene, aiNode *node)
@@ -221,9 +269,11 @@ Model::processNode(const aiScene *scene, aiNode *node)
  * It does flags to the assimp, so we will get the triangluated mesh for sure
  * In terms of 
  */
-	
 Model::Model(const std::string& file, Parameter param)
 {
+	//setup constant
+	this->instanceVBO = 0;
+	
 	Assimp::Importer import;
 	import.SetPropertyInteger(AI_CONFIG_PP_SBP_REMOVE, aiPrimitiveType_LINE | aiPrimitiveType_POINT);
 	//import.SetPropertyInteger(AI_CONFIG_PP_GSN_MAX_SMOOTHING_ANGLE, 80.0f);
@@ -255,6 +305,8 @@ Model::Model(const std::string& file, Parameter param)
 	int count = processNode(scene, scene->mRootNode);
 	for (GLuint i = 0; i < this->meshes.size(); i++)
 		this->meshes[i].pushMesh2GPU();
+	//setup the meshlayout
+	this->n_mesh_layouts = 3;
 	
 	std::map<std::string, GLuint> textures_cache;
 	//remember, every mesh has a material index
@@ -290,13 +342,12 @@ Model::Model(const std::string& file, Parameter param)
 
 Model::Model()
 {
-	
 }
 
 Model::~Model()
 {
-	//deallocate the materials
-	for (unsigned int i = 0; i < this->Materials.size(); i++);
+	if (this->instanceVBO)
+		glDeleteBuffers(1, &this->instanceVBO);
 }
 
 void
@@ -308,3 +359,120 @@ Model::draw()
 	for (GLuint i = 0; i < this->meshes.size(); i++)
 		this->meshes[i].draw(sm, *this);
 }
+
+void
+Model::make_instances(const int n_instances, InstanceINIT flag)
+{
+
+	glm::quat default_rotation(glm::vec3(0.0f, 0.0f, 0.0f));
+	glm::vec3 default_scale(0.1f);
+	
+	if (flag == INIT_random) {
+		this->instances.translations.resize(n_instances);
+		this->instances.rotations.resize(n_instances);
+		this->instances.scales.resize(n_instances);
+		
+		std::random_device rd;
+		std::minstd_rand el(rd());
+
+		for (int i = 0; i < n_instances; i++) {
+			this->instances.translations[i] = glm::vec3(el(), el(), el());
+			this->instances.rotations[i] = default_rotation;
+			this->instances.scales[i] = default_scale;
+		}
+	} else {
+		//for square example
+		//take 1000 as example
+		int rows = n_instances; //31
+		int cols = n_instances; //32, 31*32 = 992
+		int count = 0;
+
+		this->instances.translations.resize(rows * cols);
+		this->instances.rotations.resize(rows * cols);
+		this->instances.scales.resize(rows * cols);
+		
+		for (int i = 0; i < rows; i++) {
+			for( int j = 0;  j < cols; j++) {
+				this->instances.translations[count] = glm::vec3((float)i, 0.0f, (float)j);
+				this->instances.rotations[count] = default_rotation;
+				this->instances.scales[count] = default_scale;
+				count += 1;
+			}
+		}
+	}
+	//you don't know whether the meshes is uploaded to GPU
+}
+
+void Model::pushIntances2GPU()
+{
+	if (this->instanceVBO)
+		glDeleteBuffers(1, &this->instanceVBO);
+	
+	std::vector<glm::vec3>& trs = this->instances.translations;
+	std::vector<glm::quat>& rts = this->instances.rotations;
+	std::vector<glm::vec3>& scs = this->instances.scales;
+	size_t ninstances = this->instances.translations.size();
+	
+	std::vector<glm::mat4> instance_mats(ninstances);
+	for (size_t i = 0; i < instance_mats.size(); i++)
+		instance_mats[i] = glm::translate(trs[i]) * glm::mat4_cast(rts[i]) * glm::scale(scs[i]);
+
+	glGenBuffers(1, &this->instanceVBO);
+	glBindBuffer(GL_ARRAY_BUFFER, this->instanceVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::mat4) * instance_mats.size(), &instance_mats[0], GL_STATIC_DRAW);
+//	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	size_t vec4_size = sizeof(glm::vec4);
+	
+	for (size_t i = 0; i < meshes.size(); i++) {
+		glBindVertexArray(meshes[i].VAO);
+//		glBindBuffer(GL_ARRAY_BUFFER, this->instanceVBO);
+
+		GLuint va = this->get_layout_count();
+		glEnableVertexAttribArray(va);
+		glVertexAttribPointer(va, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void *)0);
+		glEnableVertexAttribArray(va+1);
+		glVertexAttribPointer(va+1, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void *)vec4_size);
+		glEnableVertexAttribArray(va+2);
+		glVertexAttribPointer(va+2, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void *)(2*vec4_size));
+		glEnableVertexAttribArray(va+3);
+		glVertexAttribPointer(va+3, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void *)(3*vec4_size));
+
+		glVertexAttribDivisor(va, 1);
+		glVertexAttribDivisor(va+1, 1);
+		glVertexAttribDivisor(va+2, 1);
+		glVertexAttribDivisor(va+3, 1);
+
+		glBindVertexArray(0);
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	std::cerr << "instanced!!"  << std::endl;
+}
+		
+
+
+//cpu based instancing
+CubeModel::CubeModel(const glm::vec3 translation, const glm::vec3 scale, const glm::quat rotation)
+{
+	this->instanceVBO = 0;
+	this->meshes.push_back(Mesh(CUBEVERTS, CUBENORMS, CUBETEXS, 36));
+	glm::quat default_rotation = glm::quat(glm::vec3(0.0f));
+	
+	glm::mat3 position_mat = glm::mat3_cast(rotation) * glm::mat3(glm::scale(scale));
+	glm::mat3 normal_mat   = glm::transpose(glm::inverse(position_mat));
+	
+	std::vector<glm::vec3>& positions = this->meshes[0].vertices.Positions;
+	std::vector<glm::vec3>& normals   = this->meshes[0].vertices.Normals;
+	//see if we need to do anything
+	if (translation == glm::vec3(0.0f) && scale == glm::vec3(1.0f) && rotation == default_rotation)
+		return;
+	
+	for (size_t i = 0; i < positions.size(); i++) {
+		positions[i] = translation + position_mat * positions[i];
+		if (!normals.empty())
+			normals[i] = normal_mat * normals[i];
+	}
+
+}
+
+

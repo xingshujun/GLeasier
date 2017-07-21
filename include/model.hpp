@@ -10,6 +10,8 @@
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
@@ -25,29 +27,32 @@ class Mesh;
 class Texture;
 class Model;
 class Instances;
-	
-struct Vertex {
-	glm::vec3 Position; //sizeof(glm::vec3) == 12
-	glm::vec3 Normal; 
-	glm::vec2 TexCoords; //sizeof(glm::vec2) == 8
+
+struct Instances {
+	std::vector<glm::vec3> translations;
+	std::vector<glm::quat> rotations;
+	std::vector<glm::vec3> scales;
 };
 
-typedef struct Vertex Vertex;
+struct Vertex {
+	glm::vec3 pos;
+	glm::vec3 normal;
+	glm::vec2 tex;
+};
+
+struct Vertices {
+	std::vector<glm::vec3> Positions;
+	std::vector<glm::vec3> Normals;
+	std::vector<glm::vec2> TexCoords;
+};
 
 /** UV mapping **/
 class Texture {
 public:
 	//GPU representation
 	GLuint id;
-//	enum TYPE {
-//		Diffuse,
-//		Specular,
-//		Ambient,
-//		Normal,
-//		NTypeTexture = 4
-//	};
 	TEX_TYPE type;
-//		cv::Mat texture;
+
 	Texture(GLuint gpu_handle, TEX_TYPE type) {
 		this->id = gpu_handle;
 		this->type = type;
@@ -60,8 +65,8 @@ typedef std::vector<Texture> Material;
 //	typedef std::array<Texture, Texture::NTypeTexture> Material;
 
 class Mesh {
-	friend Model;
 public:
+	enum PARAMS {LOAD_POS=1, LOAD_NORMAL=2, LOAD_TEX=4};
 	//a mesh contains the material
 	//this may not be a good constructor
 	Mesh(const aiScene *scene, aiMesh *mesh);
@@ -69,47 +74,62 @@ public:
 	Mesh(const std::vector<glm::vec3>& vertxs,
 	     const std::vector<glm::vec3>& norms,
 	     const std::vector<float>& indices,
-	     const std::vector<glm::vec2> *uvs = NULL,
+	     const std::vector<glm::vec2>& uvs = std::vector<glm::vec2>(),
 	     const unsigned int material_id = -1);
 	~Mesh();
-	//add a callback to user. 
-private:
+	
+	//use draw_triangles instead of draw_elements. if no_indices is specified. Efficient for small objects
+	Mesh(const float *vertx, const float *norms, const float *uvs, const int nnodes,
+	     const float *indices = NULL, const int nfaces = 0);
+	
+	//Okay, Mesh is naked now.
 	//GPU representation
 	GLuint VAO;
 	GLuint VBO, EBO;
 	//CPU representation
-	std::vector<Vertex> vertices;
+	struct Vertices vertices;
 	std::vector<GLuint> indices;
 	//since the texture is stored with scene, not 
 	int materialIndx;
 	//push vertices to gpu
-	void pushMesh2GPU();
+	void pushMesh2GPU(int params = LOAD_POS | LOAD_NORMAL | LOAD_TEX);
 	void draw(GLuint prog, const Model& model);
 	void draw(const ShaderMan *sm, const Model& model);
-
+	//add a callback to user. 
 };
 
-//A model is a list of Meshes
+//It should be a tree later on
 class Model {
 	friend Mesh;
-private:
-	enum Parameter {
-		NO_PARAMS   = 0,
-		NO_TEXTURE  = 1,
-		AUTO_NORMAL = 2,
-	};
-	//you can't actually draw one VBO at a time.
-	GLuint VAO;
+	friend Instances;
+protected:
+	int processNode(const aiScene *scene, aiNode *node);	
+
 	//Each mesh coordinates is in the model coordinate system, this is how it works
 	std::vector<Mesh> meshes;
 	//materials is a vector of vector
 	std::vector<Material> Materials;
 	std::string root_path;
-	const ShaderMan *shader_to_draw;	
-	int processNode(const aiScene *scene, aiNode *node);
+	const ShaderMan *shader_to_draw;
+	//std::vector<Model *> children;
+	struct Instances instances;
+	//GL interfaces
+	GLuint instanceVBO = 0;
+	int n_mesh_layouts;
 
 public:
-	//Model *modelFromFile(const std::string& file);
+	enum InstanceINIT {
+		INIT_random, //randomly initialize n 
+		INIT_squares, // n by n from (0,0)
+	};
+	enum Parameter {
+		NO_PARAMS   = 0,
+		NO_TEXTURE  = 1,
+		AUTO_NORMAL = 2,
+	};
+	
+	
+	//Model *modelFromFile(const std::string& file), we could loaded instance nodes from here
 	Model(const std::string& file, Parameter params = NO_PARAMS);
 	Model(void);
 	~Model(void);
@@ -119,36 +139,53 @@ public:
 	//bind, unbind shader
 	void bindShader(const ShaderMan *sm) {this->shader_to_draw = sm;}
 	const ShaderMan* currentShader(void) {return this->shader_to_draw;}
+	//get methods
+	int get_layout_count() const {return this->n_mesh_layouts;}
+	int get_ninstances() const {return this->instances.translations.size(); }
+	
+	void pushIntances2GPU(void);
+	void push2GPU(int param) {
+		//get the proper texture 
+		this->n_mesh_layouts = 1;
+		if (param & Mesh::LOAD_NORMAL)
+			this->n_mesh_layouts += 1;
+		if (param & Mesh::LOAD_TEX)
+			this->n_mesh_layouts += 1;
+		
+		for (unsigned int i = 0; i < this->meshes.size(); i++)
+			this->meshes[i].pushMesh2GPU(param);
+		
+		//We can do it here or 
+		if (this->instances.translations.size() > 0 && instanceVBO == 0)
+			this->pushIntances2GPU();
+		
+	}
+	//instancing interfaces
+	void append_instance(const glm::vec3 translation,
+			     const glm::vec3 scale=glm::vec3(1.0f),
+			     const glm::quat rotation=glm::quat(glm::vec3(0.0f))) {
+		this->instances.translations.push_back(translation);
+		this->instances.scales.push_back(scale);
+		this->instances.rotations.push_back(rotation);
+	}
+	//also call the instances2GPU 
+	void make_instances(const int n_instances, InstanceINIT method =INIT_squares);
 };
 
-//third layer of the geometry
-class Instances {
-private:
-	//this is like the animations
-	std::vector<glm::vec3> positions;
-	std::vector<glm::mat3> rotations;
-//		std::vector<glm::vec3> traslations;
-	//we don't control the model here
-	const Model& target;
 
+/* some special models to create */
+class CubeModel : public Model {
+	
 public:
-	enum INIT {
-		INIT_random, //randomly initialize n 
-		INIT_squares,
-	};
-	//initialize n instances based on the flags.
-	Instances(const Model& target, const int n_instances = 1, INIT flag = INIT_random);
-	void appendInstance(const glm::vec3& positon, const glm::mat3& rotation);
-	//later on you need to figure out how to pass mats to GPU, or you could
-	//uses the draw instance function
-	void instaceMats(std::vector<glm::mat4>& mats);
+	//this will give you a one-by-one cube
+	CubeModel(const glm::vec3 translation = glm::vec3(0.0f),
+		  const glm::vec3 scale = glm::vec3(1.0f),
+		  const glm::quat rotation = glm::quat(glm::vec3(0.0f)));
+	//void SetColor(glm::vec4 color);
 };
 
 
 //now, define a bunch of functions
 GLuint loadTexture2GPU(const std::string fname);
-
-
-
 
 #endif /* EOF */
