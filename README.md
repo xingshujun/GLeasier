@@ -23,4 +23,4 @@ Here is an template of drawing procedures:
 	}
 	
 Here is an example to render shadows with this project.
-![Shadow mapping](https://www.dropbox.com/s/30qpifb3jg3gg5m/screen_cap.png?dl=0)
+![Shadow mapping](https://raw.githubusercontent.com/xeechou/gltutorial/master/t13_lightmap/screen_cap.png)
