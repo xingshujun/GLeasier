@@ -22,5 +22,8 @@ Here is an template of drawing procedures:
 		contx.run();
 	}
 	
-Here is an example to render shadows with this project.
+An example to render shadows with this project.
 ![Shadow mapping](https://raw.githubusercontent.com/xeechou/gltutorial/master/t13_lightmap/screen_cap.png)
+
+Instance by changing only one line
+![one-line-instancing](https://raw.githubusercontent.com/xeechou/gltutorial/master/t12_cubemaps/screen_cap.png)
