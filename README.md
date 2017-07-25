@@ -1,4 +1,4 @@
-#GLeasier
+##GLeasier
 
 This project is the result from my `OpenGL` learning experience. We always have
 to setup too many things before we can actually draw something. This library
